@@ -1,0 +1,1599 @@
+---
+title: "Linked Trips"
+author: "Amelia Morrissey"
+date: "4/15/2021"
+output: html_document
+---
+
+Required Packages
+```{r}
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(writexl)
+library(lubridate)
+library(data.table)
+```
+
+Import and format Filtered Data
+```{r}
+temp <- Filtered_202107 #%>%
+  #filter(Date < ymd("2021-01-01")) 
+
+Trip_Days <- temp %>%
+  group_by(UUID, Date) %>%
+  summarise(n_trip = n())
+
+Single_Day_trips <- Trip_Days %>%
+  filter(n_trip == 1)
+
+Single_Day_trips <- Trip_Days %>%
+  filter(n_trip == 2)
+```
+
+Add Customer-Day ID and "sequence"
+```{r}
+# Filtered_04302021 <- read_excel("C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Filtered Data/Filtered_04302021.xlsx")
+
+Filtered <- Full_202107 #%>%
+  #mutate(Date = as.POSIXct(Date))
+#Remove Stop data if already present
+# Filtered <- Filtered %>%
+#   select(-Loc_Sequence, -Stop_id, -Stop_Latitude, -Stop_Longitude, -Stop_name)
+
+# Filtered <- Filtered %>%
+#   filter(Date >= "2020-08-01")
+
+#%>%
+#   mutate(FTime_Scanned = substr(Time_Scanned,1,nchar(Pass_Act$Time_Scanned)-9))
+# 
+# Filtered$FTime_Scanned <- as_datetime(Filtered$FTime_Scanned, tz = "EST")
+# Filtered$First_Activation <- as_datetime(Filtered$First_Activation, tz = "EST")
+# Filtered$Purchased <- as_datetime(Filtered$Purchased, tz = "EST")
+# Filtered$Expiration <- as_datetime(Filtered$Expiration, tz = "EST")
+
+Filtered <- Filtered %>% 
+  #group_by(UUID, Date) %>%
+  mutate(CD_ID = paste(UUID, Date, sep = "_"))
+
+Filtered <- Filtered %>%
+  group_by(CD_ID) %>%
+  mutate(Sequence = order(order(FTime_Scanned, decreasing=T)))
+
+
+# Filtered <- Filtered %>%
+#   mutate(Faretype = trimws(Faretype, "both"))
+
+#add another sequence variable for those with location data
+# Loc <- Filtered %>%
+#   filter(!is.na(Latitude)) %>%
+#   group_by(CD_ID) %>%
+#   mutate(Loc_Sequence = order(order(FTime_Scanned, decreasing=T))) %>%
+#   select(CD_ID, FTime_Scanned, Loc_Sequence)
+# 
+# Filtered <- left_join(Filtered, Loc)
+
+#write_xlsx(Filtered, "C:/Users/staff/Documents/R/Mobile Data Analysis/R Exports/Filtered_04302021_O-O.xlsx")
+```
+
+Match to Stop Polygons
+```{r}
+dhjksl <- Filtered
+
+# Remove Stop data if already present
+# Filtered <- Filtered %>%
+#   select(-Loc_Sequence, -Stop_id, -Stop_Latitude, -Stop_Longitude, -Stop_name)
+
+library(rgdal)
+dsn = "C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/QGIS Outputs/Thiessen Polygons/Stops Theissen Polygons"
+verbose = T
+Theissen_Poly <- readOGR(dsn=dsn)
+Theissen_Poly <- spTransform(Theissen_Poly, CRS("+proj=longlat +datum=WGS84")) #change CRS
+
+Stops <- data.frame(Latitude = Filtered$Latitude,
+                    Longitude = Filtered$Longitude)
+
+Stops <- Stops %>%
+  filter(!is.na(Latitude), !is.na(Longitude))%>%
+  filter(Longitude <= (-72) & Longitude >= (-73)) %>%
+  filter(Latitude <= 42.75 & Latitude >= 41.9)
+
+
+# convert data frame to SpatialPoints class
+coordinates(Stops) <- ~Longitude+Latitude
+
+# make sure the two files share the same CRS
+Stops@proj4string <- Theissen_Poly@proj4string
+
+# plot(Theissen_Poly, border = "grey")
+# points(Stops, col = "red", cex = 1)
+# axis(1) # showing the axes helps to check whether the coordinates are what you expected
+# axis(2)
+
+
+library(rgeos)
+Intersect <- over(Stops, Theissen_Poly)
+# Intersect
+
+#Rename columns
+Intersect <- Intersect %>%
+  dplyr::rename(Stop_Latitude = "Stop_Latit") %>%
+  dplyr::rename(Stop_Longitude = "Stop_Longi")
+
+temp1 <- Filtered %>%
+  filter(!is.na(Latitude), !is.na(Longitude))%>%
+  filter(Longitude <= (-72) & Longitude >= (-73)) %>%
+  filter(Latitude <= 42.75 & Latitude >= 41.9)
+
+temp2 <- Filtered %>%
+  filter((is.na(Longitude) | (Longitude > (-72) | Longitude < (-73))) | (is.na(Latitude) | (Latitude > 42.75 | Latitude < 41.9)))
+
+nrow(Filtered)
+nrow(temp1)
+nrow(temp2) + nrow(temp1)
+nrow(Intersect)
+
+#join Stop-ids with activation stops
+temp1 <- cbind(temp1, Intersect)
+
+Filtered <- rbind(temp1, temp2)
+
+#Filtered_04302021 <- Filtered
+```
+
+Match to Stop Corridor Polygons
+```{r}
+
+dhjksl <- Filtered
+#Filtered <- dhjksl
+
+#Remove Corridor data if already present
+# Filtered <- Filtered %>%
+#   select(-Loc_Sequence, -Corr_Latit, -Corr_Longi, -AllSector, -AllSub.Sec, -AllArea, -AllCorrido)
+
+library(rgdal)
+dsn = "C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Shapefiles Library/Stops Thiessen Polygons/Corridor Thiessen Polygons"
+
+
+verbose = T
+Theissen_Poly <- readOGR(dsn=dsn)
+Theissen_Poly <- spTransform(Theissen_Poly, CRS("+proj=longlat +datum=WGS84")) #change CRS
+
+Acts <- data.frame(Latitude = Filtered$Latitude, 
+                    Longitude = Filtered$Longitude)
+
+Acts <- Acts %>% 
+  filter(!is.na(Latitude), !is.na(Longitude))%>%
+  filter(Longitude <= (-72) & Longitude >= (-73)) %>%
+  filter(Latitude <= 42.75 & Latitude >= 41.9)
+
+
+# convert data frame to SpatialPoints class
+coordinates(Acts) <- ~Longitude+Latitude
+
+# make sure the two files share the same CRS
+Acts@proj4string <- Theissen_Poly@proj4string
+
+# plot(Theissen_Poly, border = "grey")
+# points(Stops, col = "red", cex = 1)
+# axis(1) # showing the axes helps to check whether the coordinates are what you expected
+# axis(2)
+
+
+library(rgeos)
+Intersect <- over(Acts, Theissen_Poly)
+# Intersect
+
+#rename columns
+Intersect <- Intersect %>% 
+  dplyr::rename(Corr_Latit = "Stop_Latit",
+                Corr_Longi = "Stop_Longi") %>% 
+  select(-Stop_id, -Stop_name)
+
+temp1 <- Filtered %>%
+  filter(!is.na(Latitude), !is.na(Longitude))%>%
+  filter(Longitude <= (-72) & Longitude >= (-73)) %>%
+  filter(Latitude <= 42.75 & Latitude >= 41.9)
+
+temp2 <- Filtered %>%
+  filter((is.na(Longitude) | (Longitude > (-72) | Longitude < (-73))) | 
+           (is.na(Latitude) | (Latitude > 42.75 | Latitude < 41.9)))
+
+nrow(Filtered)  
+nrow(temp1)
+nrow(temp2) + nrow(temp1)
+nrow(Intersect)
+
+#join Corr-ids with activation stops
+temp1 <- cbind(temp1, Intersect) 
+
+Filtered <- rbind(temp1, temp2)
+
+# temp <- Filtered %>% 
+#   select(UUID, Serial, Time_Scanned, Corr_Latit, Corr_Longi, AllSector, AllSub.Sec, AllArea, AllCorrido)
+
+#Filtered_04302021 <- left_join(Filtered_04302021, temp)
+
+#Change Corridor name to ThP_AllSto 
+Filtered <- Filtered %>% 
+  select(-AllCorrido) %>%
+  dplyr::rename(AllCorrido = "ThP_AllSto")
+
+#Create Corr ID
+Corridors <- Filtered %>% ungroup() %>% select(AllCorrido)
+Corridors <- distinct(Corridors)
+Corridors <- Corridors %>% 
+  mutate(Corr_id = order(order(AllCorrido))) %>% 
+  mutate(Corr_id = ifelse(is.na(AllCorrido), NA, Corr_id))
+Filtered <- left_join(Filtered, Corridors)
+
+library(beepr)
+beep()
+```
+
+Filtered Corrs and Trip_Seq
+```{r}
+#create trip IDs
+Filtered_Corrs <- Filtered %>%
+  group_by(CD_ID) %>%
+  arrange(Sequence) %>%
+  mutate(lead_Corr_id = lead(Corr_id)) %>%
+  mutate(trip_ID = paste(Corr_id, lead_Corr_id, sep = "-"))
+
+Filtered_Corrs <- Filtered_Corrs %>% 
+  filter(Corr_id != lead_Corr_id |is.na(lead_Corr_id))
+
+#create day travel itineraries
+Trip_Feed <- Filtered_Corrs %>%
+  select(CD_ID, Sequence, Corr_id) %>%
+  arrange(Sequence)
+
+Trip_Seq <- Trip_Feed %>% 
+  select(-Sequence,-Corr_id)
+
+# temp <- Trip_Feed %>%
+#     group_by(CD_ID) %>%
+#     slice(1) %>%
+#     dplyr::rename(origin = Stop_id) %>%
+#     select(CD_ID, origin)
+# Trip_Seq <- left_join(Trip_Seq, temp)
+  
+i = 1
+for(i in c(1:13)){
+  
+  temp <- Trip_Feed %>%
+    group_by(CD_ID) %>%
+    slice(i) %>%
+    dplyr::rename(Corr_temp = Corr_id) %>%
+    select(CD_ID, Corr_temp)
+  
+  nam <- paste("Corr", i, sep = "_")
+  col.from <- c("Corr_temp")
+  col.to <- c(nam)
+  
+  temp <- temp %>%
+    rename_at(vars(col.from), ~col.to)
+  
+  Trip_Seq <- left_join(Trip_Seq, temp)
+  
+  i <- i+1
+}
+
+Trip_Seq <- distinct(Trip_Seq)
+```
+
+Unlinked Trips
+```{r}
+Unlinked_Trips <- Filtered_Corrs %>%
+  ungroup() %>%
+  select(trip_ID, Corr_id, lead_Corr_id, CD_ID)
+
+Unlinked_Trips <- Unlinked_Trips %>%
+  filter(!is.na(lead_Corr_id)& !is.na(Corr_id))
+Unlinked_Trips_UUID <- Unlinked_Trips
+
+Unlinked_Trips <- Unlinked_Trips %>%
+  group_by(trip_ID, Corr_id, lead_Corr_id) %>%
+  summarise(occurances = n())
+ 
+Unlinked_Trips <- Unlinked_Trips %>% 
+  rename(Corr_id1 = "Corr_id", 
+         Corr_id2 = "lead_Corr_id")
+  
+#Combine Unlinked Trips between the same origins with different directions
+#create numeric Corr id
+Corrs <- Filtered_Corrs %>% select(Corr_id) %>% ungroup() %>% select(-CD_ID)
+Corrs <- distinct(Corrs)
+Corrs$Corr_num <- Corrs %>% group_indices(Corr_id)
+
+Unlinked_Trips <- left_join(Unlinked_Trips, Corrs, by=c("Corr_id1"="Corr_id"))
+Unlinked_Trips <- Unlinked_Trips %>% rename("Corr_num1" = "Corr_num")
+
+Unlinked_Trips <- left_join(Unlinked_Trips, Corrs, by=c("Corr_id2"="Corr_id"))
+Unlinked_Trips <- Unlinked_Trips %>% rename("Corr_num2" = "Corr_num")
+
+#any(Unlinked_Trips$Corr_id1 == Unlinked_Trips$Corr_id2)
+
+from1to2 <- Unlinked_Trips %>% 
+  filter(Corr_num1 < Corr_num2)
+
+#switch Corr order for from 2 to 1
+from2to1 <- Unlinked_Trips %>% 
+  filter(Corr_num2 < Corr_num1) %>%
+  mutate(temp = Corr_id2, 
+         Corr_id2 = Corr_id1, 
+         Corr_id1 = temp) %>%
+  ungroup()%>%
+  select(-temp, -Corr_num1, -Corr_num2, -trip_ID) %>%
+  mutate(trip_ID = paste(Corr_id1, Corr_id2, sep = "-")) %>%
+  rename(occurances_2to1 = "occurances")
+
+Unlinked_Trips <- full_join(from1to2, from2to1)
+
+Unlinked_Trips <- Unlinked_Trips %>%
+  rename(occurances_1to2 = "occurances")
+
+Unlinked_Trips <- Unlinked_Trips %>%
+  mutate(Total_Occuranes = sum(occurances_1to2, occurances_2to1, na.rm = T)) %>%
+  select(-Corr_num1, -Corr_num2)
+```
+
+TwoPoint
+```{r}
+###create duplicate df for Qgis mapping
+TwoPoint_Corr <- Unlinked_Trips %>%
+  ungroup() %>%
+  select(trip_ID,Corr_id1, Corr_id2, Total_Occuranes)
+
+Seq_1 <- TwoPoint_Corr %>% 
+  select(-Corr_id2) %>%
+  mutate(Sequence = 1)
+
+Seq_2 <- TwoPoint_Corr %>% 
+  select(-Corr_id1) %>%
+  dplyr::rename(Corr_id1 = "Corr_id2") %>%
+  mutate(Sequence = 2)
+
+TwoPoint_Corr <- rbind(Seq_1, Seq_2)
+
+TwoPoint_Corr <- TwoPoint_Corr %>%
+  rename(Corr_id = "Corr_id1")
+
+```
+
+Day Travel
+```{r}
+#Create Day Travel Id
+Day_Travel <- Trip_Seq %>% 
+  mutate(Day_Travel_ID = paste(Corr_1, Corr_2, Corr_3, Corr_4, 
+                               Corr_5, Corr_6, Corr_7, Corr_8, 
+                               Corr_9, Corr_10, Corr_11, Corr_12, 
+                               Corr_13, sep="_"))
+
+Day_Travel$Day_Travel_ID <- gsub("_NA", "", Day_Travel$Day_Travel_ID) 
+
+# Day_travel <- Filtered_Corrs %>%
+#   group_by(CD_ID) %>%
+#   mutate(test = slice(2)[,c("Sequence")])
+  
+Day_Travel <- Day_Travel %>%
+  filter(!is.na(Corr_1) & !is.na(Corr_2)) %>%
+  select(-CD_ID)%>%
+  ungroup() %>%
+  group_by(Day_Travel_ID) %>%
+  mutate(occurances = n())
+Day_Travel <- distinct(Day_Travel)
+
+ 
+Seq_1 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_1) %>%
+    dplyr::rename(Corr_id = "Corr_1") %>%
+    mutate(Sequence = 1)
+  
+Seq_2 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_2) %>%
+    dplyr::rename(Corr_id = "Corr_2") %>%
+    mutate(Sequence = 2)
+
+Seq_3 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_3) %>%
+    dplyr::rename(Corr_id = "Corr_3") %>%
+    mutate(Sequence = 3)
+
+Seq_4 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_4) %>%
+    dplyr::rename(Corr_id = "Corr_4") %>%
+    mutate(Sequence = 4)
+
+Seq_5 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_5) %>%
+    dplyr::rename(Corr_id = "Corr_5") %>%
+    mutate(Sequence = 5)
+
+Seq_6 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_6) %>%
+    dplyr::rename(Corr_id = "Corr_6") %>%
+    mutate(Sequence = 6)
+
+Seq_7 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_7) %>%
+    dplyr::rename(Corr_id = "Corr_7") %>%
+    mutate(Sequence = 7)
+
+Seq_8 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_8) %>%
+    dplyr::rename(Corr_id = "Corr_8") %>%
+    mutate(Sequence = 8)
+
+Seq_9 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_9) %>%
+    dplyr::rename(Corr_id = "Corr_9") %>%
+    mutate(Sequence = 9)
+
+Seq_10 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_10) %>%
+    dplyr::rename(Corr_id = "Corr_10") %>%
+    mutate(Sequence = 10)
+
+Seq_11 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_11) %>%
+    dplyr::rename(Corr_id = "Corr_11") %>%
+    mutate(Sequence = 11)
+
+Seq_12 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_12) %>%
+    dplyr::rename(Corr_id = "Corr_12") %>%
+    mutate(Sequence = 12)
+
+Seq_13 <- Day_Travel %>% 
+    select(Day_Travel_ID, occurances, Corr_13) %>%
+    dplyr::rename(Corr_id = "Corr_13") %>%
+    mutate(Sequence = 13)
+
+
+
+# Day_Trips <- Day_Travel %>% 
+#     select(Day_Travel_ID, occurances, Corr_1) %>%
+#     dplyr::rename(Corr_id = "Corr_1")%>%
+#     filter(is.na(Corr_id))
+
+Day_Travel <- rbind(Seq_1, Seq_2, Seq_3, Seq_4, Seq_5, Seq_6, Seq_7, 
+                   Seq_8, Seq_9, Seq_10, Seq_11, Seq_12, Seq_13)
+
+rm(Seq_1, Seq_2, Seq_3, Seq_4, Seq_5, Seq_6, Seq_7, Seq_8, Seq_9, Seq_10, 
+   Seq_11, Seq_12, Seq_13)
+
+Day_Travel <- Day_Travel %>%
+  filter(!is.na(Corr_id))
+
+Multipoint_Corr <- Day_Travel
+
+
+```
+
+Add in Stop Lat and Long
+```{r}
+# Stop_Locs <- read.csv("C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/Stop Locations with Corrected Names 3-1-2021.csv")
+# 
+# #Day_Travel <- left_join(Day_Travel, Stop_Locs, by = "Stop_id")
+# #TwoPoint_Corr <- left_join(TwoPoint_Corr, Stop_Locs, by = "Stop_id")
+# Unlinked_Trips <- left_join(Unlinked_Trips, Stop_Locs, by= c("Stop_id1"="Stop_id"))
+# Unlinked_Trips <- Unlinked_Trips %>%
+#   rename(Stop_name1 = "Stop_name",
+#          Stop_Latitude1 = "Stop_Latitude",
+#          Stop_Longitude1 = "Stop_Longitude")
+# 
+# temp <- Unlinked_Trips %>%
+#   select(trip_ID, Stop_id2)
+# temp <- left_join(temp, Stop_Locs, by = c("Stop_id2" = "Stop_id"))
+# temp <- temp %>%
+#   rename(Stop_name2 = "Stop_name",
+#          Stop_Latitude2 = "Stop_Latitude",
+#          Stop_Longitude2 = "Stop_Longitude")
+# 
+# Unlinked_Trips = left_join(Unlinked_Trips, temp)
+
+```
+
+Add in Corridor information
+```{r}
+Corr_Locs <- Filtered %>%
+  ungroup() %>%
+  select(Corr_id, AllCorrido, Corr_Latit, Corr_Longi)
+#AllSector, AllSub.Sec, AllArea
+Corr_Locs <- distinct(Corr_Locs)
+#remove NA rows
+# Corr_Locs <- Corr_Locs %>%
+#   filter(!is.na(Corr_Latit) & !is.na(AllCorrido))
+
+Multipoint_Corr <- left_join(Day_Travel, Corr_Locs, by = "Corr_id")
+TwoPoint_Corr <- left_join(TwoPoint_Corr, Corr_Locs, by = "Corr_id")
+
+
+Unlinked_Trips <- left_join(Unlinked_Trips, Corr_Locs, by= c("Corr_id1"="Corr_id"))
+Unlinked_Trips <- Unlinked_Trips %>% 
+  rename(AllCorrido1 = "AllCorrido",
+         Corr_Latit1 = "Corr_Latit", 
+         Corr_Longi1 = "Corr_Longi")
+#temp <- Unlinked_Trips
+Unlinked_Trips <- left_join(Unlinked_Trips, Corr_Locs, by= c("Corr_id2"="Corr_id"))
+Unlinked_Trips <- Unlinked_Trips %>% 
+  rename(AllCorrido2 = "AllCorrido",
+         Corr_Latit2 = "Corr_Latit", 
+         Corr_Longi2 = "Corr_Longi")
+
+
+
+# temp <- Unlinked_Trips %>%
+#   select(trip_ID, Corr_id2)
+# temp <- Corr_Locs
+# temp <- temp %>%
+#   rename(All_Corrido2 = "AllCorrido", 
+#          Corr_Latit2 = "Corr_Latit",
+#          Corr_Longi2 = "Corr_Longi")
+# Unlinked_Trips <- left_join(Unlinked_Trips, temp, by = c("Corr_id2" = "Corr_id"))
+
+```
+
+Match Routes to Stops
+Route_Stop_Mx
+```{r}
+#Read in Route/Stop Data
+APC <- read_excel("C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/APC Route Stop.xlsx")
+
+
+Route_Stop <- APC %>%
+  select(NewRouteReportLabel, UniqueRouteInternalID, StopID)
+
+Route_Stop$NewRouteReportLabel <- sub("\\(X)" , "", Route_Stop$NewRouteReportLabel)
+Route_Stop$NewRouteReportLabel <- sub(" " , "", Route_Stop$NewRouteReportLabel)
+
+Route_Stop <- Route_Stop %>%
+  mutate(StopID = ifelse(StopID>=5101&StopID<=5117, 5108, StopID))
+
+Route_Stop <- distinct(Route_Stop)
+
+Stops <- Route_Stop %>% 
+  select(StopID) %>%
+  mutate(StopID = as.character(StopID))
+
+Stops <- distinct(Stops)
+
+# Stops2 <- TwoPoint_04302021 %>% 
+#   ungroup()%>%
+#   select(Stop_id) %>%
+#   rename(StopID = "Stop_id")
+# 
+# Stops2 <- distinct(Stops2)
+
+# Missing <- anti_join(Stops2, Stops)
+
+# Missing$StopReportLabel <- NA
+
+# Stops <- rbind(Stops, Missing)
+
+# Missing$NewRouteReportLabel <- c("NA", "R24", "R10", "NE", "WP", "NA", "WP", "NE","NE", "B43", "R10", "NE", "WP", "NA", "NE", "WP","NE","NE","NE","NE","NA", "WP", "WP", "WP", "NE", "WP")
+  
+
+# temp <- data.frame(StopID = 5091, NewRouteReportLabel = "B23")
+# Missing <- rbind(Missing, temp)
+# Missing$UniqueRouteInternalID <- NA
+# Missing <- Missing %>%
+#   select(NewRouteReportLabel, UniqueRouteInternalID, StopID)
+# Route_Stop <- rbind(Route_Stop, Missing)
+
+Route_Stop <- Route_Stop %>%
+  filter(StopID != 0 & NewRouteReportLabel != "9999") 
+
+col_names <- unique(Route_Stop$NewRouteReportLabel)
+Route_Stop_Mx = as.data.frame(matrix(numeric(),nrow = length(Stops$StopID), 
+                                     ncol = length(col_names)))
+colnames(Route_Stop_Mx) = col_names
+rownames(Route_Stop_Mx) = Stops$StopID
+
+# Routes <- Route_Stop %>%
+#   select(-Direction, -UniqueRouteInternalID, -StopID)
+# Routes <- distinct(Routes)
+# 
+# Routes <- 
+
+#union station (5108) is at row 433
+#the P20E is at column 39
+# i=433
+# j=39
+#route = "B43"
+#Route_Stop_Mx[i,j]
+for(i in 1:nrow(Route_Stop_Mx)){
+  for(j in 1:ncol(Route_Stop_Mx)){
+    Route_Stop_Mx[i,j] = 0
+    route <- colnames(Route_Stop_Mx)[j]
+    route
+    stop <- rownames(Route_Stop_Mx)[i]
+    stop
+    #create vector of stops for each route
+    route_stops <- Route_Stop %>% 
+      filter(NewRouteReportLabel == route)
+    if(stop %in% route_stops$StopID){
+      Route_Stop_Mx[i,j] = 1
+    }
+    j=j+1
+  }
+  i=i+1
+}
+
+beep()
+```
+
+Match Route to Corridors via Stops
+Route_Corr_Mx
+```{r}
+#Corridor stop matching
+Corr_Stop <- Filtered %>%
+  ungroup() %>%
+  select(Corr_id, Stop_id, AllCorrido)
+Corr_Stop <- distinct(Corr_Stop)
+
+Corridors <- Corr_Stop %>% 
+  select(Corr_id)
+Corridors <- distinct(Corridors)
+Corridors <- na.omit(Corridors)
+#Route Corridor Matrix
+
+#if a route has a stop is in a corridor, that corridor has that route
+
+
+col_names <- unique(Route_Stop$NewRouteReportLabel)
+Route_Corr_Mx = as.data.frame(matrix(numeric(),nrow = length(Corridors$Corr_id), ncol = length(col_names)))
+colnames(Route_Corr_Mx) = col_names
+rownames(Route_Corr_Mx) = Corridors$Corr_id %>% sort()
+
+Corr_Stop <- Corr_Stop %>%
+  mutate(stop_row_idx = match(Stop_id, rownames(Route_Stop_Mx))) 
+
+i=38
+#for each corridor
+for(i in 1:nrow(Route_Corr_Mx)){
+  corr <- rownames(Route_Corr_Mx)[i]
+  corr
+  #create vector of stops for this corridor
+  Corr_stops <- Corr_Stop %>% 
+    filter(Corr_id == corr)
+  Corr_stops
+  #get a mini matrix of the Stop_Route Matrix for only these Stops
+  temp <- Route_Stop_Mx[Corr_stops$stop_row_idx,]
+  temp
+  #sum the mini matrix columns vertically 
+  #to get a total n stops for each route in this corridor
+  temp <- colSums(temp, na.rm = T)
+  temp
+  temp <- ifelse(temp>0, 1, 0)
+  temp
+  #for each route
+  for(j in 1:ncol(Route_Corr_Mx)){
+    Route_Corr_Mx[i,j] <- temp[j]
+  }
+}
+library(beepr)
+beep()
+
+# write_xlsx(Route_Corr_Mx, "C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/Route_Corr_Mx.xlsx")
+```
+
+
+Route Trips Matrix
+Match Routes to Trips via Corridors
+```{r}
+
+
+#create Trips Dataframe
+Trips_Corr <- Unlinked_Trips 
+  
+Trips_Corr <- Trips_Corr %>%
+  mutate(Corr1_row_idx = match(Corr_id1, rownames(Route_Corr_Mx)), 
+         Corr2_row_idx = match(Corr_id2, rownames(Route_Corr_Mx))) 
+#42106016
+Trips_Corr <- Trips_Corr %>%
+  mutate(N = (round(Corr_Latit1, digits=4) >= 42.10620 & 
+                round(Corr_Latit2, digits=4) >= 42.10620),
+         S = (round(Corr_Latit1, digits=4) <= 42.10620 & 
+                round(Corr_Latit2, digits=4) <= 42.10620),
+         NS = ((round(Corr_Latit1, digits=4) < 42.10620 & 
+                  round(Corr_Latit2, digits=4) > 42.10620)|
+                 (round(Corr_Latit1, digits=4) > 42.10620 & 
+                    round(Corr_Latit2, digits=4) < 42.10620)))
+
+Trips_Corr <- Trips_Corr %>% 
+  mutate(Cardinal = case_when(N==T~"N", 
+                              S==T~"S",
+                              NS==T~"NS"))# %>%
+  #select(-N, -S, -NS)
+# Union <- Trips_Corr %>%
+#   filter(Stop_id1 == 5108 | Stop_id2 == 5108)
+
+temp <- Trips_Corr %>% 
+  select(trip_ID)
+distinct(temp)
+
+#Create Route Trip Matrix
+col_names <- unique(Route_Stop$NewRouteReportLabel)
+Route_Trip_Mx = as.data.frame(matrix(numeric(),
+                                     nrow = length(Trips_Corr$trip_ID), 
+                                     ncol = length(col_names)))
+colnames(Route_Trip_Mx) = col_names
+rownames(Route_Trip_Mx) = temp$trip_ID
+
+# i=1
+# j=1
+#for each Trip
+for(i in 1:nrow(Route_Trip_Mx)){
+  Corr1_idx = Trips_Corr$Corr1_row_idx[i]
+  Corr2_idx = Trips_Corr$Corr2_row_idx[i]
+  #For each route
+  for(j in 1:ncol(Route_Trip_Mx)){
+    Corr1 = Route_Corr_Mx[Corr1_idx,j]
+    Corr2 = Route_Corr_Mx[Corr2_idx,j]
+    #if both corridors in this trip are on this route, 
+    #then this trip is on this route
+    OnRoute = ifelse(Corr1 ==1 & Corr2 == 1, 1, 0)
+    Route_Trip_Mx[i,j] = OnRoute 
+    #j=j+1
+  }
+  #i=i+1
+}
+
+
+#Match Trips_Corr to routes
+temp <- Route_Trip_Mx %>%
+  mutate(trip_ID = rownames(Route_Trip_Mx))
+Trips_Corr <- merge(Trips_Corr, temp, by="trip_ID")
+
+Trips_Corr$Route_Trips_Idx <- 1:nrow(Route_Trip_Mx)
+
+Trips_Corr <- Trips_Corr %>%
+  mutate(n_Routes = rowSums(.[19:72],na.rm=T))
+
+library(beepr)
+beep()
+```
+
+Compare Route Matching by stop and by corridor
+```{r}
+#Corridor Route Matching
+#How many activations were not matched to a corrridor?
+temp <- Filtered_04302021 %>%
+  filter(is.na(Latitude)) %>%
+  mutate(no_corr = is.na(AllCorrido))
+table(temp$no_corr)
+#How many trips unmatched to routes when matching by corridor?
+Unmatched_Corr <- Trips_Corr %>% filter(n_Routes == 0)
+#percent of unique trips
+nrow(Unmatched_Corr)/nrow(Trips_Corr)
+#percent of occurances
+sum(Unmatched_Corr$Total_Occuranes)/sum(Trips_Corr$Total_Occuranes)
+
+
+
+#Stop Route Matching
+
+temp <- Filtered_04302021 %>%
+  filter(is.na(Latitude)) %>%
+  mutate(no_stop = is.na(Stop_id))
+table(temp$no_stop)
+
+#How many trips unmatched to routes when matching by corridor?
+Unmatched_Stop <- Trips_Stop %>% filter(n_Routes == 0)
+#percent of unique trips
+nrow(Unmatched_Stop)/nrow(Trips_Stop)
+#percent of occurances
+sum(Unmatched_Stop$Total_Occuranes)/sum(Trips_Stop$Total_Occuranes)
+
+
+```
+
+
+#join needed routes to TwoPoint Data
+```{r}
+
+TwoPoint_Corr <- TwoPoint_Corr %>% 
+  select(-Corr_id, -AllCorrido, -Corr_Latit, -Corr_Longi)
+TwoPoint_Corr <- left_join(TwoPoint_Corr, Trips_Corr)
+
+#Two_Point_Corr_G1 <- Two_Point_Corr
+```
+
+Export
+```{r}
+#rename 
+Multipoint_Corr_04302021 <- Multipoint_Corr
+TwoPoint_Corr_04302021 <- TwoPoint_Corr %>%
+  select(-Corr1_row_idx, -Corr2_row_idx)
+# 
+write_xlsx(Multipoint_Corr_04302021, "C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/Multipoint_Corr_04302021.xlsx")
+# 
+write_xlsx(TwoPoint_Corr_04302021, "C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/TwoPoint_Corr_04302021.xlsx")
+```
+
+G1 Analysis
+```{r}
+#G1 Trips_Corr before grouping all stops 5101-7117 to be stop id 5108
+G1_trips_before <- G1_trips
+G1_trips <- Trips_Corr %>% 
+  filter(G1 == 1)
+sum(G1_trips$Total_Occuranes)
+
+G1_Corrs <- Route_Corr_Mx %>% 
+  filter(G1 == 1)
+G1_Corrs <- as.data.frame(rownames(G1_Corrs))
+G1_Corrs <- G1_Corrs %>%
+  rename(Corr_id = "rownames(G1_Corrs)")
+
+Bytemark_Corrs <- as.data.frame(unique(Trips_Corr$Corr_id1))
+Bytemark_Corrs <- Bytemark_Corrs %>%
+  rename(Corr_id = "unique(Trips_Corr$Corr_id1)")
+Bytemark_Corrs <- Bytemark_Corrs %>%
+  mutate(Bytemark = 1) %>% 
+  mutate(Corr_id = as.character(Corr_id))
+
+G1_Corrs <- left_join(G1_Corrs, Bytemark_Corrs)
+G1_Corrs <- G1_Corrs %>% 
+  mutate(Corr_id = as.numeric(Corr_id))
+sum(G1_Corrs$Bytemark, na.rm = T)
+
+#write_xlsx(G1_stops, "C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/G1_Stops_R.xlsx")
+
+
+```
+
+Transfers - What routes are G1 riders (N and S) transferring between?
+Transfer/Connections Take2
+
+Connections
+```{r}
+#Use stop Trip_Seq
+
+#record connections vertically
+#change from horizontal to vertical agg
+connection1 <- Trip_Seq %>%
+  select(CD_ID, Corr_1, Corr_2, Corr_3) %>%
+  rename(Corr_A = "Corr_1", 
+         Corr_B = "Corr_2", 
+         Corr_C = "Corr_3") %>% 
+  mutate(Order = 1) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection2 <- Trip_Seq %>%
+  select(CD_ID, Corr_2, Corr_3, Corr_4) %>%
+  rename(Corr_A = "Corr_2", 
+         Corr_B = "Corr_3", 
+         Corr_C = "Corr_4") %>% 
+  mutate(Order = 2) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection3 <- Trip_Seq %>%
+  select(CD_ID, Corr_3, Corr_4, Corr_5) %>%
+  rename(Corr_A = "Corr_3",
+         Corr_B = "Corr_4",
+         Corr_C = "Corr_5") %>%
+  mutate(Order = 3) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection4 <- Trip_Seq %>%
+  select(CD_ID, Corr_4, Corr_5, Corr_6) %>%
+  rename(Corr_A = "Corr_4",
+         Corr_B = "Corr_5",
+         Corr_C = "Corr_6") %>%
+  mutate(Order = 4) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection5 <- Trip_Seq %>%
+  select(CD_ID, Corr_5, Corr_6, Corr_7) %>%
+  rename(Corr_A = "Corr_5",
+         Corr_B = "Corr_6",
+         Corr_C = "Corr_7") %>%
+  mutate(Order = 5) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection6 <- Trip_Seq %>%
+  select(CD_ID, Corr_6, Corr_7, Corr_8) %>%
+  rename(Corr_A = "Corr_6",
+         Corr_B = "Corr_7",
+         Corr_C = "Corr_8") %>%
+  mutate(Order = 6) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection7 <- Trip_Seq %>%
+  select(CD_ID, Corr_7, Corr_8, Corr_9) %>%
+  rename(Corr_A = "Corr_7",
+         Corr_B = "Corr_8",
+         Corr_C = "Corr_9") %>%
+  mutate(Order = 7) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection8 <- Trip_Seq %>%
+  select(CD_ID, Corr_8, Corr_9, Corr_10) %>%
+  rename(Corr_A = "Corr_8",
+         Corr_B = "Corr_9",
+         Corr_C = "Corr_10") %>%
+  mutate(Order = 8) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection9 <- Trip_Seq %>%
+  select(CD_ID, Corr_9, Corr_10, Corr_11) %>%
+  rename(Corr_A = "Corr_9",
+         Corr_B = "Corr_10",
+         Corr_C = "Corr_11") %>%
+  mutate(Order = 9) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection10 <- Trip_Seq %>%
+  select(CD_ID, Corr_10, Corr_11, Corr_12) %>%
+  rename(Corr_A = "Corr_10",
+         Corr_B = "Corr_11",
+         Corr_C = "Corr_12") %>%
+  mutate(Order = 10) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+connection11 <- Trip_Seq %>%
+  select(CD_ID, Corr_11, Corr_12, Corr_13) %>%
+  rename(Corr_A = "Corr_11",
+         Corr_B = "Corr_12",
+         Corr_C = "Corr_13") %>%
+  mutate(Order = 11) %>%
+  filter(!is.na(Corr_B) & !is.na(Corr_C))
+
+Connections <- rbind(connection1, connection2, connection3, connection4,
+                     connection5, connection6, connection7, connection8,
+                     connection9, connection10, connection11)
+rm(connection1, connection2, connection3, connection4, connection5,
+   connection6, connection7, connection8, connection9, connection10,
+   connection11, connection12, connection13)
+
+# Connections <- rbind(connection1, connection2)
+
+
+#create trip ids and combine same origin - different direction trips
+#create numeric Corr id
+Corrs <- Filtered_Corrs %>% select(Corr_id) %>% ungroup() %>% select(-CD_ID)
+Corrs <- distinct(Corrs)
+Corrs$Corr_num <- Corrs %>% group_indices(Corr_id)
+
+Connections <- left_join(Connections, Corrs, by=c("Corr_A"="Corr_id"))
+Connections <- Connections %>% rename("Corr_numA" = "Corr_num")
+
+Connections <- left_join(Connections, Corrs, by=c("Corr_B"="Corr_id"))
+Connections <- Connections %>% rename("Corr_numB" = "Corr_num")
+
+Connections <- left_join(Connections, Corrs, by=c("Corr_C"="Corr_id"))
+Connections <- Connections %>% rename("Corr_numC" = "Corr_num")
+
+#Duplicate Corr B since it needs to be used twice
+Connections <- Connections %>% 
+  mutate(Corr_B2 = Corr_B, 
+         Corr_numB2 = Corr_numB,
+         Connection_Point = Corr_B, 
+         Corr_AO = Corr_A, 
+         Corr_CO = Corr_C)
+
+#switch Corr order for from 2 to 1 for trip A
+#also remove trips beginning and ending in the same place
+Trip_A_from1to2 <- Connections %>% 
+  filter(Corr_numA < Corr_numB)
+Trip_A_from2to1 <- Connections %>% 
+  filter(Corr_numB < Corr_numA) %>%
+  mutate(temp = Corr_B, 
+         Corr_B = Corr_A, 
+         Corr_A = temp)
+#combine back together
+Connections = rbind(Trip_A_from1to2, Trip_A_from2to1)
+#Create TripA Trip ID
+Connections <- Connections %>%
+  mutate(trip_A = paste(Corr_A, Corr_B, sep = "-"))
+
+
+#switch Corr order for from 2 to 1 for trip B
+Trip_B_from1to2 <- Connections %>% 
+  filter(Corr_numB2 < Corr_numC)
+Trip_B_from2to1 <- Connections %>% 
+  filter(Corr_numC < Corr_numB2) %>%
+  mutate(temp = Corr_B2, 
+         Corr_B2 = Corr_C, 
+         Corr_C = temp)
+#combine back together
+Connections = rbind(Trip_B_from1to2, Trip_B_from2to1)
+#Create TripB Trip ID
+Connections <- Connections %>%
+  mutate(trip_B = paste(Corr_B2, Corr_C, sep = "-"))
+
+
+#count occurrances of each connection
+Connections <- Connections %>%
+  group_by(trip_A, trip_B, Connection_Point, Corr_AO, Corr_CO) %>%
+  summarise(Occurrances = n())
+
+
+#Combine like-connections in different directions
+#always put Trip with lower connecting corr number in trip A
+A <- Connections %>%
+  filter(Corr_AO < Corr_CO)
+B <- Connections %>%
+  filter(Corr_AO >= Corr_CO)
+
+B <- B %>%
+  mutate(temp = trip_B,
+         trip_B = trip_A,
+         trip_A = temp) %>%
+  #also switch Corrs A and C
+  mutate(temp = Corr_CO,
+         Corr_CO = Corr_AO,
+         Corr_AO = temp)
+
+# Note: because of spotty missing loc data, there are some connections with NAs, 
+# and those are removed at this step
+Connections <- rbind(A, B)
+Connections <- Connections %>%
+  select( -temp)
+#combine occurrances
+G1_Connections <- G1_Connections %>%
+  group_by(trip_A, trip_B, Connection_Point, Corr_AO, Corr_CO) %>% 
+  summarise(Occurrances = sum(Occurrances))
+
+
+#count occurrances of each connection
+Connections <- Connections %>%
+  group_by(trip_A, trip_B, Connection_Point, Corr_AO, Corr_CO) %>%
+  summarise(Occurrances = sum(Occurrances))
+
+#Remove Round trips - these are just parts of transfer trips, avoid double counting
+# Connections <- Connections %>% 
+#   filter(stop_AO != stop_CO)
+
+Connections <- Connections %>% 
+  mutate(Connection_ID = paste(Corr_AO, Connection_Point, Corr_CO, sep = "-"))
+
+```
+
+G1 Connections Analysis
+```{r}
+#filter to those connections involving the G1 corridor
+G1_trips <- Trips_Corr %>%
+  filter(G1 == 1)
+
+G1_Connections <- Connections %>%
+  mutate(A_G1 = trip_A %in% G1_trips$trip_ID, 
+         B_G1 = trip_B %in% G1_trips$trip_ID) %>%
+  filter(A_G1 ==T | B_G1 == T)
+
+#Combine like-connections in different directions
+#always put G1 Trips as trip A
+A_G1 <- G1_Connections %>%
+  filter(A_G1 == T)
+B_G1 <- G1_Connections %>%
+  filter(B_G1 == T & A_G1 == F)
+
+B_G1 <- B_G1 %>%
+  mutate(temp = trip_B,
+         trip_B = trip_A,
+         trip_A = temp) %>%
+  #also switch Corrs A and C
+  mutate(temp = Corr_CO,
+         Corr_CO = Corr_AO,
+         Corr_AO = temp)
+
+G1_Connections <- rbind(A_G1, B_G1)
+G1_Connections <- G1_Connections %>%
+  select(-A_G1, -B_G1, -temp)
+#combine occurrances
+G1_Connections <- G1_Connections %>%
+  group_by(trip_A, trip_B, Connection_Point, Corr_AO, Corr_CO) %>% 
+  summarise(Occurrances = sum(Occurrances))
+
+#reclaculate A_G1 and B_G1
+# G1_Connections <- G1_Connections %>%
+#   mutate(A_G1 = trip_A %in% G1_trips$trip_ID, 
+#          B_G1 = trip_B %in% G1_trips$trip_ID)
+
+#match trip A to the G1
+#Trips that go through Union Station:
+#G1, G2, G2E, G3, B4, G5, B6, B7, R10, P11, B12, R14, B17, P20, P20E, P21, P21E, B23, X92
+
+#Match trip B (the non G1 Trip) to a Route
+temp <- Route_Trip_Mx %>%
+  #select(G1, G2, G2E, G3, B4, G5, B6, B7, R10, P11, B12, R14, B17, P20, P20E, P21, P21E, B23, X92) %>%
+  mutate(trip_B = rownames(Route_Trip_Mx))
+# # ConnectionsA <- Connections %>%
+# #   select(trip_A, Occurrances)
+# ConnectionsA <- merge(G1_Connections, temp, by="trip_A")
+# 
+# temp <- temp %>%
+#   rename(trip_B = "trip_A")
+G1_Connections <- merge(G1_Connections, temp, by="trip_B")
+
+#NAs are introduced when one corridor in the trip has a Route match and the other
+#doesn't - the only corridors with no route matches are corrs 182, 72, 76, and 97
+#remove these rows
+
+G1_Connections <- na.omit(G1_Connections)
+# This removes 119 occurances
+
+#mark connections with a NS G1 Connection
+temp1 <- Corr_Locs %>% 
+  select(Corr_Latit, Corr_id) %>% 
+  rename(AO_Latit =  "Corr_Latit", 
+         Corr_AO = "Corr_id")
+temp2 <- Corr_Locs %>% 
+  select(Corr_Latit, Corr_id) %>% 
+  rename(CP_Latit =  "Corr_Latit", 
+         Connection_Point = "Corr_id")
+
+G1_Connections <- left_join(G1_Connections, 
+                                        temp1)
+G1_Connections <- left_join(G1_Connections, 
+                                        temp2)
+G1_Connections <- G1_Connections %>% 
+  mutate(NS = ifelse((AO_Latit > 42.10921 & CP_Latit < 42.10292)|
+                     (CP_Latit > 42.10921 & AO_Latit < 42.10292), 1, 0))
+
+G1_Connections <- G1_Connections %>% 
+  mutate(Cardinal = case_when(
+    ((AO_Latit > 42.10921 & CP_Latit < 42.10292)|
+                     (CP_Latit > 42.10921 & AO_Latit < 42.10292))~ "NS", 
+    (AO_Latit >= 42.10292 & CP_Latit >= 42.10292) ~ "N", 
+    (AO_Latit <= 42.10921 & CP_Latit <= 42.10921) ~ "S"
+    ))
+G1_Connections <- G1_Connections %>% 
+  select(-CP_Latit, AO_Latit)
+#G1_Connections <- merge(ConnectionsA, ConnectionsB, by=c("trip_A", "trip_B", "Connection_Point", "Occurrances"))
+```
+
+Analysis 
+```{R}
+#Total number of connections
+sum(G1_Connections$Occurrences)
+#11268
+#new 14588
+
+#filter out round trips 
+G1_Connections_OtherRoutes <- G1_Connections %>% 
+  filter(G1==0)
+#Connections through Union station:
+Union <- G1_Connections_OtherRoutes %>%
+  #5108
+  filter(Connection_Point == 146)
+sum(Union$Occurrences)
+sum(G1_Connections_OtherRoutes$Occurrences)
+#% of connections to other routes through union
+sum(Union$Occurrences)/
+sum(G1_Connections_OtherRoutes$Occurrences)
+
+
+
+
+#% of connections to other routes that included a N/S G1 Trip
+temp <- G1_Connections_OtherRoutes %>% filter(NS==T)
+sum(temp$Occurrences)
+sum(temp$Occurrences)/sum(G1_Connections_OtherRoutes$Occurrences)
+
+#% of round trips that include a N/S trip
+Round <- G1_Connections %>% 
+  filter(G1==1)
+temp <- Round %>% filter(NS==T)
+sum(temp$Occurrences)
+sum(temp$Occurrences)/sum(Round$Occurrences)
+
+#% of all connections that include a N/S trip
+temp <- G1_Connections %>% filter(Cardinal == "NS")
+sum(temp$Occurrences)
+sum(temp$Occurrences)/sum(G1_Connections$Occurrences)
+ 
+#% of all connections that include a N trip
+temp <- G1_Connections %>% filter(Cardinal == "S")
+sum(temp$Occurrences)
+sum(temp$Occurrences)/sum(G1_Connections$Occurrences)
+
+
+
+
+
+G1_Connections <- G1_Connections %>% 
+  mutate(percent_occ = Occurrences/sum(G1_Connections$Occurrences)) %>%
+  rename(Occurrences = "Occurrences")
+
+
+a <- ggplot(G1_Connections, aes(Occurrences)) + geom_density(fill = 'orange')
+a
+ggsave(plot=a, filename="G1_Connection Occurrences Density.pdf", width=8, height=4)
+
+
+b <- ggplot(G1_Connections, aes(Occurrences)) + geom_boxplot(fill = 'orange')
+b
+ggsave(plot=b, filename="G1_Connection Occurrences Boxplot.pdf", width=8, height=4)
+
+
+#How many users are represented in the connections?
+
+```
+
+G1_Connections Mapping
+```{r}
+#Remove people who are getting back on the G1 to only look at transfers
+Connections_OtherRoutes <- G1_Connections %>% 
+  filter(G1 == 0)
+#How many stay on the G1?
+(nrow(G1_Connections) - nrow(Connections_OtherRoutes))/nrow(G1_Connections)
+#32.27%
+
+G1_Conn_Map_Transfers <- Connections_OtherRoutes %>% 
+  mutate(Connection_ID = paste(Corr_AO, Connection_Point, Corr_CO, sep = "-"))
+
+AO <- G1_Conn_Map_Transfers %>%
+  select(Connection_ID, Occurrences, Corr_AO) %>%
+  mutate(Sequence = 1) %>%
+  rename("Corr_id" = "Corr_AO")
+CO <- G1_Conn_Map_Transfers %>%
+  select(Connection_ID, Occurrences, Corr_CO) %>%
+  mutate(Sequence = 3) %>%
+  rename("Corr_id" = "Corr_CO")
+CP <- G1_Conn_Map_Transfers %>%
+  select(Connection_ID, Occurrences, Connection_Point) %>%
+  mutate(Sequence = 2) %>%
+  rename("Corr_id" = "Connection_Point")
+
+G1_Conn_Map_Transfers <- rbind(AO, CP, CO)
+
+G1_Conn_Map_Transfers <- left_join(G1_Conn_Map_Transfers, Corr_Locs)
+
+G1_Conn_Map_Transfers <- G1_Conn_Map_Transfers
+
+
+write.csv(G1_Conn_Map_Transfers, "C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/G1_Conn_Map_Transfers_Corr2.csv")
+
+
+#without transfer
+G1_Conn_Map_Direct <- Connections_OtherRoutes %>% 
+  mutate(Connection_ID = paste(Corr_AO, Connection_Point, Corr_CO, sep = "-"))
+
+AO <- G1_Conn_Map_Direct %>%
+  select(Connection_ID, Occurrences, Corr_AO, Connection_Point) %>%
+  mutate(Sequence = 1) %>%
+  rename("Corr_id" = "Corr_AO")
+
+CO <- G1_Conn_Map_Direct %>%
+  select(Connection_ID, Occurrences, Corr_CO, Connection_Point) %>%
+  mutate(Sequence = 2) %>%
+  rename("Corr_id" = "Corr_CO")
+
+
+G1_Conn_Map_Direct <- rbind(AO, CO)
+
+G1_Conn_Map_Direct <- left_join(G1_Conn_Map_Direct, Corr_Locs)
+
+write.csv(G1_Conn_Map_Direct, "C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/G1_Conn_Map_Direct_Corr2.csv")
+
+
+```
+
+
+Route Connections
+```{r}
+#Problem: I need to be able to remove round trips that are a part of another trip
+#Solution: I need to do this based on Trips - OD, no the whole day
+
+#Connections to different routes:
+Route_Connection_Occurrences <- G1_Connections %>% 
+  dplyr::select(-trip_A, -trip_B, -Connection_Point, -Occurrences, -Corr_AO, -Corr_CO,  -Cardinal)
+
+#Remove the connections
+
+Route_Connection_Occurrences <- sweep(Route_Connection_Occurrences, MARGIN = 1, 
+                                      STATS = G1_Connections$Occurrences, 
+                                      FUN = "*")
+
+colnames <- colnames(Route_Connection_Occurrences)
+colnames <- paste("X", colnames)
+colnames <- gsub(" ", "", colnames)
+colnames(Route_Connection_Occurrences) <- colnames
+
+library(dplyr)
+# Route_Connection_Occurrences <- matrix(Route_Connection_Occurrences)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  select(-XB43, -XB48, -XR42, -XR44, -X39E, -X801, -X802, -X803, -X804, -X805, -X806, -XR41,
+         -X821, -X892, -X820, -X823, -X824, -XR24, -XR29, -XOWL, -X10S, -X36, -X30, -X31,
+         -X38, -X45, -X46, -X33, -X34, -X35, -X51, -XB12, -XB23, -X39, -XG2E)
+
+
+colnames <- colnames(Route_Connection_Occurrences)
+colnames <- gsub("X", "", colnames)
+colnames(Route_Connection_Occurrences) <- colnames
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  rename(X90 = "90",
+         X92 = "92")
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  select(G2, G3, B4, G5, B6, B7, B7S, R10, P11, R14, B17, P20, P20E, P21, P21E, X90, X92, LOOP)
+
+#temp <- Route_Connection_Occurrences
+Route_Connection_Occurrences <- colSums(Route_Connection_Occurrences)
+Route_Connection_Occurrences <- as.data.frame(Route_Connection_Occurrences)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  rename("G1_Connections" = "Route_Connection_Occurrences")
+Route_Connection_Occurrences$Route <- rownames(Route_Connection_Occurrences)
+
+G1_Occurrences <- sum(G1_Connections$Occurrences)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>% 
+  arrange(G1_Connections) %>%
+  mutate(Percent_connections = round(G1_Connections/G1_Occurrences*100, digits=1), 
+         Percent_Rounded = round(G1_Connections/G1_Occurrences*100, digits=0))
+
+library(forcats)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  mutate(Route = fct_relevel(Route, 
+            "G2", "G3", "B4", "G5", "B6", "B7", "B7S", 
+                                               "R10", "P11", "R14", "B17", "P20", "P20E", 
+                                               "P21", "P21E", "X90", "X92", "LOOP"))
+  
+
+
+library(ggthemes)
+Route_Connection_Occurrences_Graph <- 
+  ggplot(Route_Connection_Occurrences, aes(Route, G1_Connections)) + 
+  geom_col() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  ylab("") +
+  ggtitle("Bytemark Connections Between the G1 and Other Routes")+
+  geom_text(aes(label=G1_Connections, vjust = -0.2)) #+
+  #theme_solarized()
+
+Route_Connection_Occurrences_Graph
+ggsave(plot=Route_Connection_Occurrences_Graph, filename="G1 Route Connections.pdf", width=8, height=4)
+
+  # %>%
+  # 9999, B43, B48, R41, R42, R44, 39E, 801, 802, 803, 804, 805, 806, 821, 892, 820, 823, 824, LOOP, P11, B12, B17, B23, B4, B6, B7, G1, G2, G3, G5, P20, P21, R10, R14, R24, R29, X90, X92, P20E, P21E, OWL, 10S, 36, 30, 31, 38, 39, 45, 46, 33, 34, 35, 51, G2E, B7S
+  # mutate(G1=G1*Occurrences, G2=G2*Occurrences, G2E=G2E*Occurrences, 
+  #        G3=G3*Occurrences, B4=B4*Occurrences, G5=G5*Occurrences, B6=B6*Occurrences, 
+  #        B7=B7*Occurrences, R10=R10*Occurrences, P11=P11*Occurrences, 
+  #        B12=B12*Occurrences, R14=R14*Occurrences, B17=B17*Occurrences, 
+  #        P20=P20*Occurrences, P20E=P20E*Occurrences, P21=P21*Occurrences, 
+  #        P21E=P21E*Occurrences, B23=B23*Occurrences, X92=X92*Occurrences) #%>%
+  #select(-Occurrences)
+
+
+#Route_Corr_Mx["609",]
+sum(Route_Connection_Occurrences$Percent_connections)
+
+```
+
+Route Connections for North and South G1 Separately
+```{r}
+#NORTH
+G1_North <- G1_Connections %>% 
+  filter(Cardinal == "N")
+
+#Connections to different routes:
+Route_Connection_Occurrences <- G1_North %>% 
+  dplyr::select(-trip_A, -trip_B, -Connection_Point, -Occurrences, -Corr_AO, -Corr_CO, -NS, -Cardinal)
+
+#Remove the connections
+
+Route_Connection_Occurrences <- sweep(Route_Connection_Occurrences, MARGIN = 1, 
+                                      STATS = G1_North$Occurrences, 
+                                      FUN = "*")
+
+colnames <- colnames(Route_Connection_Occurrences)
+colnames <- paste("X", colnames)
+colnames <- gsub(" ", "", colnames)
+colnames(Route_Connection_Occurrences) <- colnames
+
+library(dplyr)
+# Route_Connection_Occurrences <- matrix(Route_Connection_Occurrences)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  select(-XB43, -XB48, -XR42, -XR44, -X39E, -X801, -X802, -X803, -X804, -X805, -X806, -XR41,
+         -X821, -X892, -X820, -X823, -X824, -XR24, -XR29, -XOWL, -X10S, -X36, -X30, -X31,
+         -X38, -X45, -X46, -X33, -X34, -X35, -X51, -XB12, -XB23, -X39, -XG2E)
+
+
+colnames <- colnames(Route_Connection_Occurrences)
+colnames <- gsub("X", "", colnames)
+colnames(Route_Connection_Occurrences) <- colnames
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  rename(X90 = "90",
+         X92 = "92")
+# Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+#   select(G1, G2, G3, B4, G5, B6, B7, B7S, R10, P11, R14, B17, P20, P20E, P21, P21E, X90, X92, LOOP)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  select(G2, G3, B4, G5, B6, B7, B7S, R10, P11, R14, B17, P20, P20E, P21, P21E, X90, X92, LOOP)
+
+
+#temp <- Route_Connection_Occurrences
+Route_Connection_Occurrences <- colSums(Route_Connection_Occurrences)
+Route_Connection_Occurrences <- as.data.frame(Route_Connection_Occurrences)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  rename("G1_North" = "Route_Connection_Occurrences")
+Route_Connection_Occurrences$Route <- rownames(Route_Connection_Occurrences)
+
+G1_Occurrences <- sum(G1_North$Occurrences)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>% 
+  arrange(G1_North) %>%
+  mutate(Percent_connections = round(G1_North/G1_Occurrences*100, digits=1), 
+         Percent_Rounded = round(G1_North/G1_Occurrences*100, digits=0))
+
+library(forcats)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  mutate(Route = fct_relevel(Route, 
+            "G2", "G3", "B4", "G5", "B6", "B7", "B7S", 
+                                               "R10", "P11", "R14", "B17", "P20", "P20E", 
+                                               "P21", "P21E", "X90", "X92", "LOOP"))
+  
+
+
+library(ggthemes)
+Route_Connection_Occurrences_Graph <- 
+  ggplot(Route_Connection_Occurrences, aes(Route, G1_North)) + 
+  geom_col() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  ylab("") +
+  ggtitle("North G1 Connections to Other Routes")+
+  geom_text(aes(label=G1_North, vjust = -0.2)) #+
+  #theme_solarized()
+
+Route_Connection_Occurrences_Graph
+ggsave(plot=Route_Connection_Occurrences_Graph, filename="G1 North Connections.pdf", width=8, height=4)
+```
+
+
+
+```{r}
+
+
+#SOUTH
+G1_South <- G1_Connections %>% 
+  filter(Cardinal == "S")
+
+#Connections to different routes:
+Route_Connection_Occurrences <- G1_South %>% 
+  dplyr::select(-trip_A, -trip_B, -Connection_Point, -Occurrences, -Corr_AO, -Corr_CO, -NS, -Cardinal)
+
+#Remove the connections
+
+Route_Connection_Occurrences <- sweep(Route_Connection_Occurrences, MARGIN = 1, 
+                                      STATS = G1_South$Occurrences, 
+                                      FUN = "*")
+
+colnames <- colnames(Route_Connection_Occurrences)
+colnames <- paste("X", colnames)
+colnames <- gsub(" ", "", colnames)
+colnames(Route_Connection_Occurrences) <- colnames
+
+library(dplyr)
+# Route_Connection_Occurrences <- matrix(Route_Connection_Occurrences)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  select(-XB43, -XB48, -XR42, -XR44, -X39E, -X801, -X802, -X803, -X804, -X805, -X806, -XR41,
+         -X821, -X892, -X820, -X823, -X824, -XR24, -XR29, -XOWL, -X10S, -X36, -X30, -X31,
+         -X38, -X45, -X46, -X33, -X34, -X35, -X51, -XB12, -XB23, -X39, -XG2E)
+
+
+colnames <- colnames(Route_Connection_Occurrences)
+colnames <- gsub("X", "", colnames)
+colnames(Route_Connection_Occurrences) <- colnames
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  rename(X90 = "90",
+         X92 = "92")
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  select(G2, G3, B4, G5, B6, B7, B7S, R10, P11, R14, B17, P20, P20E, P21, P21E, X90, X92, LOOP)
+
+#temp <- Route_Connection_Occurrences
+Route_Connection_Occurrences <- colSums(Route_Connection_Occurrences)
+Route_Connection_Occurrences <- as.data.frame(Route_Connection_Occurrences)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  rename("G1_South" = "Route_Connection_Occurrences")
+Route_Connection_Occurrences$Route <- rownames(Route_Connection_Occurrences)
+
+G1_Occurrences <- sum(G1_South$Occurrences)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>% 
+  arrange(G1_South) %>%
+  mutate(Percent_connections = round(G1_South/G1_Occurrences*100, digits=1), 
+         Percent_Rounded = round(G1_South/G1_Occurrences*100, digits=0))
+
+library(forcats)
+Route_Connection_Occurrences <- Route_Connection_Occurrences %>%
+  mutate(Route = fct_relevel(Route, 
+            "G2", "G3", "B4", "G5", "B6", "B7", "B7S", 
+                                               "R10", "P11", "R14", "B17", "P20", "P20E", 
+                                               "P21", "P21E", "X90", "X92", "LOOP"))
+  
+
+
+library(ggthemes)
+Route_Connection_Occurrences_Graph <- 
+  ggplot(Route_Connection_Occurrences, aes(Route, G1_South)) + 
+  geom_col() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  ylab("Percent of Connections with the G1") +
+  ggtitle("South G1 Connections to Other Routes")+
+  geom_text(aes(label=G1_South, vjust = -0.2)) #+
+  #theme_solarized()
+
+Route_Connection_Occurrences_Graph
+ggsave(plot=Route_Connection_Occurrences_Graph, filename="G1 South Connections.pdf", width=8, height=4)
+
+```
+
+Transfer points and In demand origins/destinations
+```{r}
+#Transfer Locations 
+# G1_Transfer_Loc <- G1_Connections %>% 
+#   group_by(Connection_Point) %>% 
+#   summarise(n = n())
+
+#Remove people who are getting back on the G1
+Connections_OtherRoutes <- G1_Connections %>% 
+  filter(G1 == 0)
+
+#In-Demand Locations
+temp <- Connections_OtherRoutes %>% 
+  select(Corr_AO, Occurrances) %>% 
+  rename("Corr_id" = "Corr_AO") %>%
+  mutate(Connecting = "G1")
+temp1 <- Connections_OtherRoutes %>%
+  select(Corr_CO, Occurrances) %>%
+  rename("Corr_id" = "Corr_CO") %>%
+  mutate(Connecting = "other")
+temp2 <- Connections_OtherRoutes %>%
+  select(Connection_Point, Occurrances) %>%
+  rename("Corr_id" = "Connection_Point") %>%
+  mutate(Connecting = "X")
+G1_InDemand <- rbind(temp, temp1, temp2)
+
+G1_InDemand <- G1_InDemand %>%
+  group_by(Corr_id, Connecting) %>%
+  summarise(Occurrances = sum(Occurrances))
+
+#Add in lat long
+G1_InDemand <- left_join(G1_InDemand, Corr_Locs)
+
+rm(temp1, temp2)
+
+#export
+write.csv(G1_InDemand, "C:/Users/staff/PVTA Dropbox/PVTA-PVPC/Mobile Data Analysis/Analysis/Origin to Origin Project/G1_InDemand_Corr2.csv")
+
+
+```
+
+Holyoke Mall Connections
+```{r}
+# subset to the Holyoke Mall Connctions (Corr_ID == 94)
+H_Mall_Connections <- Connections %>% 
+  filter(Corr_AO == 94 | (Corr_CO == 94 | Connection_Point == 94))
+
+# subset again to only H_Mall Connections that go to Union station (94-141) 
+# and connect to the G1 (other trip on G1)
+route <- "G1"
+H_Mall_Connections_G1 <- H_Mall_Connections %>% 
+  filter((trip_A == "94-141" & 
+            Route_Trip_Mx[trip_B,route] == 1) | 
+           (trip_B == "94-141" & 
+              Route_Trip_Mx[trip_A, route] == 1))
+sum(H_Mall_Connections_G1$Occurrances)
+#457 connections between the G1 and H-Mall
+
+H_Mall_Connections_Union <- H_Mall_Connections %>% 
+  filter(Connection_Point == 94 & (Corr_AO == 141 | Corr_CO == 141))
+
+sum(H_Mall_Connections_Union$Occurrances)
+#1777 connections to Union station through Holyoke Mall
+
+#Union to C and other connection point to A
+from1to2 <- H_Mall_Connections_Union %>% 
+  filter(Corr_AO == 141)
+from2to1 <- H_Mall_Connections_Union %>% 
+  filter(Corr_CO == 141) %>%
+  mutate(temp = Corr_AO, 
+         Corr_AO = Corr_CO, 
+         Corr_CO = temp)
+
+#combine back together
+H_Mall_Connections_Union = rbind(from1to2, from2to1)
+
+
+
+
+```
+
